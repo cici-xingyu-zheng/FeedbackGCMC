@@ -2,41 +2,23 @@
 # with an fixed MC-GC network, find the odor representation by minimizing the 
 # loss function using backtracking line search. 
 
+# end of 2023 will try to make a class of the network, then it'd be nice to define 
+# descending methods on different attributes.
+
 import numpy as np
 import scipy as sc
-import copy
+# import copy
 
-def project(z, theta):
-    '''
-    Inputs:
-    1) gc activities
-    2) gc threshold
+import utils
 
-    Output: projection on the non-negative orthant via thresholding
-    '''
-    z[z <= theta] = 0
-    
-    return z
+# shared helper functions:
 
-def get_gradient(activities, net_mc, theta, W):
-    '''
-    Inputs:
-    1) gc activities
-    2) net mc activity, r_m
-    3) MC-GC network
+def get_err(GC_act, odor_input, W):
 
-    Function: gradient of the loss function w.r.t gc activations
-    '''
-    grad = np.zeros((activities.size)) 
-    for i in range(activities.size):
-        grad[i] = - np.matmul(net_mc, W[i,:]) + theta
-
-    return grad
+    return odor_input - np.matmul(W, GC_act)
 
 
-
-
-def get_loss(activities, net_mc, theta):
+def get_loss(GC_act, odor_input, theta, W):
     '''
     Inputs:
     1) gc activities
@@ -45,13 +27,26 @@ def get_loss(activities, net_mc, theta):
 
     Output: loss value
     '''
-    loss = (sc.linalg.norm(net_mc, 2)**2) + theta*np.sum(activities)
+    MC_err = get_err(GC_act, odor_input, W)
+    loss = (1/2)*(sc.linalg.norm(MC_err, 2)**2) + theta*np.sum(GC_act)
     
     return loss
 
+def get_gradient(MC_err, theta, W):
+    '''
+    Inputs:
+    1) gc activities
+    2) net mc activity, r_m
+    3) MC-GC network
 
-# why we need this function?
-def generalized_grad(iterate, grad, theta, t):
+    Function: gradient of the loss function w.r.t gc activations
+    '''
+  
+    grad = - np.matmul(W.T, MC_err) + theta
+
+    return grad
+
+def generalized_grad(GC_iter, grad, theta, t):
     '''
     Proximal gradient computation 
 
@@ -63,11 +58,55 @@ def generalized_grad(iterate, grad, theta, t):
 
     Output: proximal gradient
     '''
-    return (iterate - project(iterate - t*grad, theta))/t
+    GC_aftergrad =  utils.project(GC_iter - t*grad, theta)
+
+    return GC_iter - GC_aftergrad
+
+# Quasi-Newton's method:
+
+def newtons_update(GC_act, W, projected_grad):
+
+    pseudo_hess = np.linalg.pinv(np.matmul(W.T, W))
+    # get pseudo_hessian:
+    d = - pseudo_hess @ projected_grad
+    GC_act += d
+    return GC_act
 
 
-# optimal step size 
-def line_search_PGD(activities, net_mc, theta, W, grad, loss_curr, gamma):
+alpha = .5 # \in (0, 0.5)
+beta = .8 # \in (0, 1)
+iters = 50
+def line_search_update(grad, GC_act, odor_input, theta, curr_loss, W): 
+    t = 1
+    gen_grad = generalized_grad(GC_act, grad, theta, t)
+    new_loss =  get_loss(GC_act - gen_grad, odor_input, theta, W)
+    # Armijo_bool = new_loss > curr_loss - alpha*t*(np.dot(grad, grad)) # I see grad*grad != generalized_grad* generalized_grad
+    # a modification of the sufficient descent creteria: 
+    Armijo_bool = new_loss > curr_loss - alpha*t*(np.dot(gen_grad, gen_grad)) 
+
+    count = 0
+    
+    while Armijo_bool and count < iters:
+        t *= beta
+        curr_loss = new_loss
+        gen_grad = generalized_grad(GC_act, grad, theta, t)
+        new_loss =  get_loss(GC_act - gen_grad, odor_input, theta, W)
+        # Armijo_bool =  new_loss > curr_loss - alpha*t*(np.dot(grad, grad)) 
+        Armijo_bool = new_loss > curr_loss - curr_loss - alpha*t*(np.dot(gen_grad, gen_grad)) 
+        count += 1
+
+    GC_act -= gen_grad
+    
+    return GC_act
+
+
+## Frank-Wolfe Algorithm:
+## https://fa.bianp.net/blog/2022/adaptive_fw/
+
+beta = .9
+iters = 50
+
+def line_search_PGD_update(GC_act, odor_input, theta, grad, curr_loss, W):
     '''
     Backtracking line search for projected gradient descent
 
@@ -83,100 +122,51 @@ def line_search_PGD(activities, net_mc, theta, W, grad, loss_curr, gamma):
     Output: steplength 
     '''
     t = 1
-    iter = 50
-    for i in range(iter):
-        gen_grad = generalized_grad(activities, grad, theta, t)
+    for _ in range(iters):
+        gen_grad = generalized_grad(GC_act, grad, theta, t)
         # print('Norm of generalized gradient', sc.linalg.norm(gen_grad, 2))
-        new_iterate = activities - t*gen_grad
-        new_loss = get_loss(new_iterate, net_mc, theta)
-        quad_approx = loss_curr - (t*np.matmul(grad, np.transpose(gen_grad))) + (t/2)*(sc.linalg.norm(gen_grad, 2)**2)
+        new_iterate = GC_act - t*gen_grad
+        new_loss = get_loss(new_iterate, odor_input, theta, W)
+
+        ### I don't understand this...
+        quad_approx = curr_loss - (t*np.matmul(grad, np.transpose(gen_grad))) + (t/2)*(sc.linalg.norm(gen_grad, 2)**2)
         
-        if new_loss < loss_curr and new_loss <= quad_approx:
-        # third_part = (t/2)*(sc.linalg.norm(gen_grad, 2)**2)
-        # print('Quadratic approximation', quad_approx)
-        # print('Current loss', loss_curr)
-        # print('New loss', new_loss)
-        # print('Second part', (t*np.matmul(grad, np.transpose(gen_grad))))
-        # print('Third part', third_part)
-        # print('t times Third part', t*third_part)
-        # if quad_approx < loss_curr and new_loss <= quad_approx:
-        # if new_loss < quad_approx:
-            # print('Loss current', loss_curr)
-            # print('New loss', new_loss)
-            # print('Local upper bound', quad_approx)
+        if new_loss < curr_loss and new_loss <= quad_approx:
             break 
         else:
-            t = gamma*t # backtrack till objective value at new point is smaller than a quadratic approximation
+            t = beta*t # backtrack till objective value at new point is smaller than a quadratic approximation
     
-    return t if i < iter - 1 else 0
+    # maybe haveing the zero cap make it easier:    
+    GC_act -= t*generalized_grad(GC_act, gen_grad, theta, t)   
+
+    return GC_act
 
 
-
-def get_mc_backtrack_PGD(theta, mc_input, gc_init, num_steps, gamma, W, thresh):
-    '''
-    Inner loop function: For each fixed MC-GC network, find the odor representation by minimizing the 
-    loss function using backtracking line search
-
-    Inputs: 
-    1) theta: gc threshold 
-    2) odor_input: odor in R^50
-    3) gc_init: initial value of gc activities (initial iterate)
-    4) num_steps: total optimization steps
-    5) gamma: line search parameter
-    6) W: MC-GC network
-
-    Outputs: 
-    1) Net mc-activations (can be negative) for dictionary learning
-    2) gc activations (non-negative)
-    3) loss function at final iterate
-    '''  
-    loss_list = []
-    iterate_list = [np.zeros(gc_init.size)]
-    gc_act = gc_init.copy()
+def sniff_cycle(odor_input, GC_act, theta, W):    
     
-    for i in range(num_steps):
-        net_mc = mc_input - np.matmul(np.transpose(W), gc_act)
-        loss_before_step = get_loss(gc_act, net_mc, theta)       
-        gradient = get_gradient(gc_act, net_mc, theta, W)
-        norm_grad = gradient/sc.linalg.norm(gradient,2)
+    for _ in range(1000):
+        MC_err = odor_input - np.matmul(W, GC_act)
+        grad = get_gradient(MC_err, theta, W)
+        # does normalizing it make it easier to serach t?
+        norm_grad = grad/sc.linalg.norm(grad,2)  
+        # can be swapped with other _update functions:
+        loss = get_loss(GC_act, odor_input, theta, W)
+        GC_act = line_search_PGD_update(GC_act, odor_input, theta, norm_grad, loss, W)
         
-        # backtracking line search for projected gradient descent
-        steplength = line_search_PGD(gc_act, net_mc, theta, W, norm_grad, loss_before_step, gamma)
-        
-        if steplength > 0:
-            gc_act -= steplength*generalized_grad(gc_act, norm_grad, theta, steplength)
-            
-        loss_after_step = get_loss(gc_act, net_mc, theta)
-        
-        ## Sanity checks:
-        # Ensure that iterates are within the feasible set
-        less = [act for act in gc_act if 0.00000001 < act < theta] # is this just making sure we are 
-        count_infeas = np.count_nonzero(less)
-        if count_infeas > 0:  
-            print('Step', i)
-            print('Infeasibility after PGD step')
-            print(less)
-            break
-            
-        # Ensure that the loss monotonically decreases (provable convergence)
-        if loss_after_step > loss_before_step:
-            print('Something wrong at step', i, 'with steplength', steplength)
-            print('Loss after', loss_after_step)
-            print('Loss before', loss_before_step)
-            break
-            
-        # stopping criteria
-        if abs(loss_after_step - loss_before_step) < 0.01 and sc.linalg.norm(gc_act - iterate_list[i-1], 2) < 0.1:
-            
-            new_val = copy.deepcopy(net_mc)
-            new_val[new_val <= thresh] = 0
-            print('Converged at step', i, 'with steplength', steplength)
-            print('Number of active MCs', np.count_nonzero(new_val))
-            print('Number of active GCs', np.count_nonzero(gc_act))
-            print('Function value at end', loss_after_step)
-            break
+    return GC_act
 
-        loss_list.append(loss_after_step)
-        iterate_list.append(gc_act.copy())
 
-    return net_mc, gc_act, loss_after_step
+# regularized updates: Plasticity
+def hebbian_update(W, GC_act, odor_input, etas, cap = True, cap_strength = 1):
+    for a in range(len(GC_act)):
+        for i in range(len(odor_input)):
+            if GC_act[a] > 0 and odor_input[i] > 0:
+                W[i,a] = min(W[i,a] + etas['associate']*odor_input[i]*GC_act[a], 1) 
+            # can perhaps try not updating:
+            elif GC_act[a] > 0 and odor_input[i] < 0:
+                W[i,a] = max(W[i,a] + etas['disassociate']*odor_input[i]*GC_act[a], 0)
+            else:
+                W[i,a] = max(W[i,a] - etas['forget'], 0)
+        if cap:
+            if np.sum(W[:,a]) > cap_strength:
+                W[:,a] = (cap_strength*W[:,a])/np.sum(W[:,a])
