@@ -2,13 +2,12 @@ import numpy as np
 from scipy.stats import bernoulli
 from numpy.typing import NDArray
 
-np.random.seed(2023)
-
 
 def create_network(M:int, 
                    N:int, 
                    p_conn:float, 
                    max_lim:float, 
+                   seed = 2023,
                    cap = True, 
                    cap_strength = 1, 
                    verbose = True) -> NDArray:
@@ -26,10 +25,13 @@ def create_network(M:int,
         W: the connection (weight) matrix (M, N).
     '''
 
+    np.random.seed(seed)
+
     W = np.zeros((M,N))  
     for i in range(M):
         for a in range(N):
-            W[i,a] = bernoulli.rvs(p_conn)*np.random.uniform(0,max_lim)
+            # to set the random seed for both numpy and scipy.stats:
+            W[i,a] = bernoulli.rvs(p_conn, random_state = seed+i*N+a)*np.random.uniform(0,max_lim)
 
     # capping GC max connection strength to 1:
     if cap:   

@@ -18,3 +18,20 @@ def shared_GCcount(GC_act):
     return shared # of GC for diff. odor inputs
     '''
     return np.all(GC_act, axis = 1).sum()
+
+def active_GC_counts_overtime(GC_acts_overtime):
+    
+    return (GC_acts_overtime != 0).sum(axis = 1)
+
+# def responsive_MCcount():
+#     '''
+#     for every responses[t]:
+#     # either both fire, or diverge (is it neccessary even?)
+#     response[t, :, 0] or response[t, :, 1] > 0
+#     '''
+    
+#     pass
+
+# def divergent_MCcount():
+#     passm
+
